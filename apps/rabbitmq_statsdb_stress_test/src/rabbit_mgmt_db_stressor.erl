@@ -24,10 +24,12 @@
 -export([run/1, message_queue_len/3]).
 
 -record(agg, {
-    msg_counts = []
+    msg_counts = [],
+    handle_cast_times = []
 }).
 
 
+-spec run([string()]) -> ok.
 run([Nodename]) when is_list(Nodename) ->
     Node = case lists:member($@, Nodename) of
         true ->
@@ -41,14 +43,18 @@ run([Nodename]) when is_list(Nodename) ->
         pang -> io:format(standard_error, "Could not connect to ~p.~n", [Node]), halt(1)
     end.
 
+-spec run_on_node(atom()) -> ok.
 run_on_node(Node) ->
     Stats_Receiver = stats_receiver(),
     Stats_Pid = global:whereis_name(Stats_Receiver),
     io:format("Stats DB is at ~p (~p).~n", [Stats_Receiver, Stats_Pid]),
     Aggregator = spawn_link(fun () -> aggregator(#agg{}) end),
-    {ok, TRef} = timer:apply_interval(100, ?MODULE, message_queue_len, [Node, Stats_Pid, Aggregator]),
+    {ok, Msg_Q_Len} = timer:apply_interval(100, ?MODULE, message_queue_len, [Node, Stats_Pid, Aggregator]),
+    start_handle_cast_tracer(Node, Stats_Receiver, Stats_Pid, Aggregator),
     generate_events({global, Stats_Receiver}),
-    {ok, cancel} = timer:cancel(TRef),
+    stop_handle_cast_tracer(),
+    {ok, cancel} = timer:cancel(Msg_Q_Len),
+    io:format("Rolling up statistics, this might take a moment ....~n"),
     Aggregator ! {get, self()},
     Aggregator ! stop,
     receive
@@ -56,22 +62,79 @@ run_on_node(Node) ->
             io:format("Message queue length (100ms samples):~n    ~p~n", [Stats])
     end.
 
+
+-spec message_queue_len(atom(), pid(), pid()) -> {message_queue_len, non_neg_integer()}.
 message_queue_len(Node, Stats_Pid, Aggregator) ->
     {message_queue_len, _Len} = Aggregator ! rpc:call(Node, erlang, process_info, [Stats_Pid, message_queue_len]).
 
-aggregator(#agg{msg_counts=Msg_Count} = Agg) ->
+-type tracer_state() :: {atom(), atom(), atom(), erlang:timestamp(), pid()}.
+-spec start_handle_cast_tracer(atom(), atom(), pid(), pid()) -> ok.
+start_handle_cast_tracer(Node, Stats_Receiver, Stats_Pid, Aggregator) ->
+    TS = undefined,
+    Event = undefined,
+    Tracer_State = {Stats_Receiver, handle_cast, Event, TS, Aggregator},
+    {ok, _Tracer} = dbg:tracer(process, {fun handle_cast_tracer/2, Tracer_State}),
+    {ok, Node} = dbg:n(Node),
+    ok = dbg:cn(node()),
+    {ok, [{matched, Node, 1}, {saved, 1}]} = dbg:tp({Stats_Receiver, handle_cast, 2}, [{'_', [], [{return_trace}]}]),
+    {ok, [{matched, Node, 1}]} = dbg:p(Stats_Pid, [call, timestamp]),
+    ok.
+
+-spec stop_handle_cast_tracer() -> ok.
+stop_handle_cast_tracer() ->
+    ok = dbg:stop_clear().
+
+-spec handle_cast_tracer(term(), tracer_state()) -> ok.
+handle_cast_tracer({trace_ts, _Pid, call,
+            {Stats_Receiver, handle_cast, [{event, #event{type = Event}}, _State]},
+            TS},
+        {Stats_Receiver, handle_cast, undefined, undefined, Aggregator}) ->
+    {Stats_Receiver, handle_cast, Event, TS, Aggregator};
+handle_cast_tracer({trace_ts, _Pid, return_from,
+            {Stats_Receiver, handle_cast, 2},
+            _Result,
+            TS2},
+        {Stats_Receiver, handle_cast, Event, TS1, Aggregator}) ->
+    Time_Elapsed = now_to_micros(TS2) - now_to_micros(TS1),
+    Aggregator ! {handle_cast_time, Event, Time_Elapsed},
+    {Stats_Receiver, handle_cast, undefined, undefined, Aggregator};
+handle_cast_tracer(Msg, State) ->
+    io:format(standard_error, "Unexpected handle_call tracer message:~n    ~p~n", [Msg]),
+    State.
+
+-spec aggregator(#agg{}) -> ok.
+aggregator(#agg{msg_counts=Msg_Counts, handle_cast_times = Cast_Times} = Agg) ->
     receive
         stop ->
             ok;
         {message_queue_len, Len} ->
-            aggregator(Agg#agg{msg_counts = [Len | Msg_Count]});
+            aggregator(Agg#agg{msg_counts = [Len | Msg_Counts]});
+        {handle_cast_time, Event, Micros} ->
+            New_Cast_Times = add_event_cast_time(Event, Micros, Cast_Times),
+            aggregator(Agg#agg{handle_cast_times = New_Cast_Times});
         {get, From} ->
-            From ! bear:get_statistics(lists:reverse(Agg#agg.msg_counts)),
+            Msg_Stats = bear:get_statistics(lists:reverse(Msg_Counts)),
+            Cast_Stats = [
+                {Event, bear:get_statistics(lists:reverse(Event_Times))}
+                || {Event, Event_Times} <- Cast_Times
+            ],
+            From ! [{msg_counts, Msg_Stats} | Cast_Stats],
             aggregator(Agg);
         _Info ->
             aggregator(Agg)
     end.
 
+-spec add_event_cast_time(atom(), non_neg_integer(), [{atom(), [non_neg_integer()]}]) -> [{atom(), [non_neg_integer()]}].
+add_event_cast_time(Event, Micros, Cast_Times) ->
+    case lists:keyfind(Event, 1, Cast_Times) of
+        false ->
+            lists:keystore(Event, 1, Cast_Times, {Event, [Micros]});
+        {Event, Event_Times} ->
+            lists:keyreplace(Event, 1, Cast_Times, {Event, [Micros | Event_Times]})
+    end.
+
+
+-spec generate_events({global, atom()}) -> ok.
 generate_events(Stats_DB) ->
     Conns = [ pid_and_name(<<"Conn">>, I) || I <- lists:seq(1, 1000) ],
     Chans = [ pid_and_name(Conn, I)  || {_, Conn} <- Conns, I <- lists:seq(1, 1000) ],
@@ -87,10 +150,6 @@ generate_events(Stats_DB) ->
     _Conn_Closeds = [ gen_server:cast(Stats_DB, {event, connection_closed(Pid)}) || {Pid, _} <- Conns ],
     ok.
 
--spec pid_and_name(binary(), non_neg_integer()) -> {pid(), binary()}.
-pid_and_name(Prefix, I) when is_binary(Prefix), is_integer(I), I >= 0->
-    Num = integer_to_binary(I),
-    {spawn(fun () -> ok end), <<Prefix/binary, "_", Num/binary>>}.
 
 % Switch easily between old and new versions of the stats db.
 -spec stats_receiver() -> 'rabbit_mgmt_event_collector' | 'rabbit_mgmt_db'.
@@ -107,10 +166,21 @@ stats_receiver(N) ->
         {Old_Pid, undefined} when is_pid(Old_Pid) -> rabbit_mgmt_db
     end.
 
+
+-spec pid_and_name(binary(), non_neg_integer()) -> {pid(), binary()}.
+pid_and_name(Prefix, I) when is_binary(Prefix), is_integer(I), I >= 0->
+    Num = integer_to_binary(I),
+    {spawn(fun () -> ok end), <<Prefix/binary, "_", Num/binary>>}.
+
+% The timestamp is in milli seconds
 -spec timestamp() -> non_neg_integer().
 timestamp() ->
-    {MegaSecs, Secs, MicroSecs} = os:timestamp(),
-    1000000*1000*MegaSecs + 1000*Secs + (MicroSecs div 1000).
+    {Mega, Secs, Micro} = os:timestamp(),
+    1000000*1000*Mega + 1000*Secs + (Micro div 1000).
+
+-spec now_to_micros({non_neg_integer(), non_neg_integer(), non_neg_integer()}) -> non_neg_integer().
+now_to_micros({Mega, Sec, Micro}) ->
+    1000000*1000000*Mega + 1000000*Sec + Micro.
 
 
 % some code adapted from the test suite

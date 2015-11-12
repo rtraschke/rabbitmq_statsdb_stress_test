@@ -51,7 +51,7 @@ dialyze: .dialyzer_plt compile
 	dialyzer --plt .dialyzer_plt -Wrace_conditions -I deps apps/*/ebin
 
 .dialyzer_plt:
-	dialyzer --build_plt --output_plt .dialyzer_plt --apps erts kernel stdlib -r deps
+	dialyzer --build_plt --output_plt .dialyzer_plt --apps erts kernel stdlib runtime_tools -r deps
 
 
 ####
