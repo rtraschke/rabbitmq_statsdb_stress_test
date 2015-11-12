@@ -33,7 +33,7 @@ run([Nodename]) when is_list(Nodename) ->
     end,
     case net_adm:ping(Node) of
         pong -> io:format("Connected to ~p.~n", [Node]), run_on_node(Node);
-        pang -> io:format("Could not connect to ~p.~n", [Node])
+        pang -> io:format(standard_error, "Could not connect to ~p.~n", [Node]), halt(1)
     end.
 
 run_on_node(Node) ->
@@ -97,7 +97,7 @@ stats_receiver() ->
     stats_receiver(5).
 
 stats_receiver(0) ->
-    io:format("Stats DB not found!~n", []),
+    io:format(standard_error, "Stats DB not found!~n", []),
     halt(1);
 stats_receiver(N) ->
     case {global:whereis_name(rabbit_mgmt_db), global:whereis_name(rabbit_mgmt_event_collector)} of
