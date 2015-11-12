@@ -3,7 +3,8 @@
 all: init compile
 
 # All the static upfront dependencies we need for the project
-init: deps \
+init: deps scripts \
+	deps/bear \
 	deps/amqp_client \
 	deps/rabbit_common
 
@@ -64,8 +65,26 @@ dialyze: .dialyzer_plt compile
 
 PWD=$(shell pwd)
 
+REBAR=$(PWD)/scripts/rebar
+
+scripts:
+	mkdir scripts
+
 deps:
 	mkdir deps
+
+# Fetch rebar for building deps
+
+scripts/rebar:
+	# Must follow redirects (-L), since github returns those
+	curl -L -o $@ https://github.com/rebar/rebar/releases/download/2.6.1/rebar
+	chmod +x $@
+
+# Dependencies from github
+
+deps/bear: scripts/rebar
+	git clone -n -- https://github.com/boundary/bear $@
+	(cd $@ && git checkout -q 0.8.2 && $(REBAR) compile)
 
 # Dependencies from rabbitmq
 

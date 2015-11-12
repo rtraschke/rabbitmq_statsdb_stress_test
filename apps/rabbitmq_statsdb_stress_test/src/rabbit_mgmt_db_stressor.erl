@@ -23,6 +23,11 @@
 -compile([export_all]).
 -export([run/1, message_queue_len/3]).
 
+-record(agg, {
+    msg_counts = []
+}).
+
+
 run([Nodename]) when is_list(Nodename) ->
     Node = case lists:member($@, Nodename) of
         true ->
@@ -40,35 +45,31 @@ run_on_node(Node) ->
     Stats_Receiver = stats_receiver(),
     Stats_Pid = global:whereis_name(Stats_Receiver),
     io:format("Stats DB is at ~p (~p).~n", [Stats_Receiver, Stats_Pid]),
-    Aggregator = spawn_link(fun () -> aggregator({0, 0, 0, 0}) end),
+    Aggregator = spawn_link(fun () -> aggregator(#agg{}) end),
     {ok, TRef} = timer:apply_interval(100, ?MODULE, message_queue_len, [Node, Stats_Pid, Aggregator]),
     generate_events({global, Stats_Receiver}),
     {ok, cancel} = timer:cancel(TRef),
     Aggregator ! {get, self()},
     Aggregator ! stop,
     receive
-        {Count, Min, Max, Mean} -> 
-            io:format("~p message_queue_len calls (100ms apart):~n    Min = ~p, Max = ~p, Mean = ~p~n", [Count, Min, Max, Mean])
+        Stats -> 
+            io:format("Message queue length (100ms samples):~n    ~p~n", [Stats])
     end.
 
 message_queue_len(Node, Stats_Pid, Aggregator) ->
     {message_queue_len, _Len} = Aggregator ! rpc:call(Node, erlang, process_info, [Stats_Pid, message_queue_len]).
 
-aggregator({Count, Min, Max, Mean} = State) ->
+aggregator(#agg{msg_counts=Msg_Count} = Agg) ->
     receive
         stop ->
             ok;
         {message_queue_len, Len} ->
-            New_Count = Count + 1,
-            New_Min = if Len < Min -> Len; true -> Min end,
-            New_Max = if Len > Max -> Len; true -> Max end,
-            New_Mean = ((Count * Mean) + Len) / New_Count,
-            aggregator({New_Count, New_Min, New_Max, New_Mean});
+            aggregator(Agg#agg{msg_counts = [Len | Msg_Count]});
         {get, From} ->
-            From ! State,
-            aggregator(State);
+            From ! bear:get_statistics(lists:reverse(Agg#agg.msg_counts)),
+            aggregator(Agg);
         _Info ->
-            aggregator(State)
+            aggregator(Agg)
     end.
 
 generate_events(Stats_DB) ->

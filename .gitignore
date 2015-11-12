@@ -10,3 +10,4 @@ rel/example_project
 .rebar
 .dialyzer_plt
 Emakefile
+scripts
