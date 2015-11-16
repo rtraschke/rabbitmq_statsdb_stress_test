@@ -30,7 +30,7 @@
 
 
 -spec run([string()]) -> ok.
-run([Nodename]) when is_list(Nodename) ->
+run([Nodename, CSV]) when is_list(Nodename) ->
     Node = case lists:member($@, Nodename) of
         true ->
             list_to_atom(Nodename);
@@ -39,12 +39,12 @@ run([Nodename]) when is_list(Nodename) ->
             list_to_atom(Nodename ++ "@" ++ Hostname)
     end,
     case net_adm:ping(Node) of
-        pong -> io:format("Connected to ~p.~n", [Node]), run_on_node(Node);
+        pong -> io:format("Connected to ~p.~n", [Node]), run_on_node(Node, CSV);
         pang -> io:format(standard_error, "Could not connect to ~p.~n", [Node]), halt(1)
     end.
 
--spec run_on_node(atom()) -> ok.
-run_on_node(Node) ->
+-spec run_on_node(atom(), string()) -> ok.
+run_on_node(Node, CSV) ->
     Stats_Receiver = stats_receiver(),
     Stats_Pid = global:whereis_name(Stats_Receiver),
     io:format("Stats DB is at ~p (~p).~n", [Stats_Receiver, Stats_Pid]),
@@ -58,7 +58,8 @@ run_on_node(Node) ->
     Aggregator ! {get, self()},
     Aggregator ! stop,
     receive
-        Stats -> 
+        Stats ->
+            write_to_csv(CSV, Stats),
             io:format("Message queue length (100ms samples):~n    ~p~n", [Stats])
     end.
 
@@ -245,3 +246,61 @@ queue(Name) when is_binary(Name)->
 -spec exchange(binary()) -> #resource{}.
 exchange(Name) when is_binary(Name)->
     #resource{virtual_host = <<"/">>, kind = exchange, name = Name}.
+
+-spec write_to_csv(string(), [{atom(), [{atom(), number()}]}]) -> ok.
+write_to_csv(CSV, Stats) ->
+    IoDevice = open_csv(CSV, Stats),
+    [file:write(IoDevice, create_line(Stat)) || Stat <- Stats],
+    file:close(IoDevice).
+
+-spec open_csv(string(), [{atom(), [{atom(), number()}]}]) -> pid().
+open_csv(CSV, Stats) ->
+    case file:open(CSV, [write, exclusive]) of
+        {error, eexist} ->
+            {ok, IoDevice} = file:open(CSV, [append]),
+            IoDevice;
+        {ok, IoDevice} ->
+            file:write(IoDevice, create_header(hd(Stats))),
+            IoDevice
+    end.
+
+-spec create_line({atom(), [{atom(), number()}]}) -> string().
+create_line({Tag, Values}) ->
+    Filtered = lists:sort(filter_metrics(Values)),
+    format_line(Tag, [V || {_, V} <- Filtered]).
+
+-spec create_header({atom(), [{atom(), number()}]}) -> string().
+create_header({_, Values}) ->
+    Filtered = lists:sort(filter_metrics(Values)),
+    format_line(metric, [K || {K, _} <- Filtered]).
+
+-spec format_line(atom, [{atom(), number()}]) -> string().
+format_line(Tag, Filtered) ->
+    io_lib:format("~p~s~n", [Tag, lists:flatten([io_lib:format(",~p",[Value])
+                                                 || Value <- Filtered])]).
+
+-spec filter_metrics([{atom(), number()}]) -> [{atom(), number()}].
+filter_metrics(Values) ->
+    lists:foldl(fun({histogram, _}, Acc) ->
+                        Acc;
+                   ({percentile, List}, Acc) ->
+                        filter_percentiles(List) ++ Acc;
+                   (Pair, Acc) ->
+                        [Pair | Acc]
+                end, [], Values).
+
+-spec filter_percentiles([{atom(), number()}]) -> [{atom(), number()}].
+filter_percentiles(List) ->
+    lists:map(fun({50, V}) ->
+                      {percentile50, V};
+                 ({75, V}) ->
+                      {percentile75, V};
+                 ({90, V}) ->
+                      {percentile90, V};
+                 ({95, V}) ->
+                      {percentile95, V};
+                 ({99, V}) ->
+                      {percentile99, V};
+                 ({999, V}) ->
+                      {percentile999, V}
+              end, List).
