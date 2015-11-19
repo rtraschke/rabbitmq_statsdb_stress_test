@@ -162,7 +162,7 @@ stats_receiver(0) ->
 stats_receiver(N) ->
     case {global:whereis_name(rabbit_mgmt_db), global:whereis_name(rabbit_mgmt_event_collector)} of
         {undefined, undefined} -> timer:sleep(500), stats_receiver(N-1);
-        {undefined, New_Pid} when is_pid(New_Pid) -> rabbit_mgmt_event_collector;
+        {_, New_Pid} when is_pid(New_Pid) -> rabbit_mgmt_event_collector;
         {Old_Pid, undefined} when is_pid(Old_Pid) -> rabbit_mgmt_db
     end.
 
