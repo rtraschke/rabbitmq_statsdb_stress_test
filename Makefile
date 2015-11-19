@@ -1,4 +1,5 @@
-.PHONY: all init compile rules rel rmrel package clean distclean start stop console rmlog ec2start test dialyze
+# Normally make targets are files or directories, the following don't and are thus "phony".
+.PHONY: all init compile clean distclean dialyze
 
 all: init compile
 
@@ -57,7 +58,7 @@ dialyze: .dialyzer_plt compile
 ####
 # Dependencies and other stuff required to get us going
 #
-# Some make specific vaiables get used in the recipes below:
+# Some make specific variables get used in the recipes below:
 #
 # $@ - the target
 # $(@F) - the filename part of the target (i.e. the basename)
