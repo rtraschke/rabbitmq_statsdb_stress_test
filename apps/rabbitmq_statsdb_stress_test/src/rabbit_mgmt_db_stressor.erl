@@ -24,17 +24,6 @@
 -export([run/1, clear_tracer/1, message_queue_len/2]).
 
 
--define(DEFAULT_COUNTS, [10, 100, 1000]).
-
--record(generate_event_counts, {
-  connections = ?DEFAULT_COUNTS :: [non_neg_integer()],
-  channels_per_connection = ?DEFAULT_COUNTS :: [non_neg_integer()],
-  stats_per_connection = ?DEFAULT_COUNTS :: [non_neg_integer()],
-  stats_per_channel = ?DEFAULT_COUNTS :: [non_neg_integer()],
-  queues_per_channel = ?DEFAULT_COUNTS :: [non_neg_integer()],
-  stats_per_queue = ?DEFAULT_COUNTS :: [non_neg_integer()]
-}).
-
 % Clear a potentially stuck tracer as set up below in start_handle_cast_tracer/3
 -spec clear_tracer([string()]) -> ok.
 clear_tracer([Nodename]) when is_list(Nodename) ->
@@ -75,7 +64,7 @@ run_on_node(Node, CSV) ->
     {ok, _} = rabbit_mgmt_db_stress_stats:start_link(),
     {ok, Msg_Q_Len} = timer:apply_interval(100, ?MODULE, message_queue_len, [Node, Stats_Pid]),
     start_handle_cast_tracer(Node, Stats_Receiver, Stats_Pid),
-    generate_events({global, Stats_Receiver}, #generate_event_counts{}, CSV),
+    generate_events({global, Stats_Receiver}, CSV),
     stop_handle_cast_tracer(),
     {ok, cancel} = timer:cancel(Msg_Q_Len),
     ok = rabbit_mgmt_db_stress_stats:stop().
@@ -122,17 +111,82 @@ handle_cast_tracer(Msg, State) ->
     State.
 
 
--spec generate_events({global, atom()}, #generate_event_counts{}, string()) -> ok.
-generate_events(Stats_DB, #generate_event_counts{} = Counts, CSV) ->
-    [ generate_events(Stats_DB, N_Conns, N_Chans, N_Conn_Stats, CSV)
-    || N_Conns <- Counts#generate_event_counts.connections,
-        N_Chans <- Counts#generate_event_counts.channels_per_connection,
-        N_Conn_Stats <- Counts#generate_event_counts.stats_per_connection
-    ],
+-record(event_counts, {
+    connections :: non_neg_integer(),
+    channels_per_connection :: non_neg_integer(),
+    queues_per_channel :: non_neg_integer(),
+    stats_per_connection :: non_neg_integer(),
+    stats_per_channel :: non_neg_integer(),
+    stats_per_queue :: non_neg_integer()
+}).
+
+-spec generate_events({global, atom()}, string()) -> ok.
+generate_events(Stats_DB, CSV) ->
+    [ generate_events(Stats_DB, Counts, CSV) || Counts <- event_counts()],
     ok.
 
--spec generate_events({global, atom()}, non_neg_integer(), non_neg_integer(), non_neg_integer(), string()) -> ok.
-generate_events(Stats_DB, N_Conns, N_Chans, N_Conn_Stats, CSV) ->
+-spec event_counts() -> [#event_counts{}].
+event_counts() ->
+    [
+    % 1000 connection_created and connection_closed
+        #event_counts{
+            connections = 1000, channels_per_connection = 0, queues_per_channel = 0,
+            stats_per_connection = 0, stats_per_channel = 0, stats_per_queue = 0
+        },
+    % 1000000 connection_created and connection_closed
+        #event_counts{
+            connections = 1000000, channels_per_connection = 0, queues_per_channel = 0,
+            stats_per_connection = 0, stats_per_channel = 0, stats_per_queue = 0
+        },
+    % 1000 channel_created and channel_closed
+        #event_counts{
+            connections = 1, channels_per_connection = 1000, queues_per_channel = 0,
+            stats_per_connection = 0, stats_per_channel = 0, stats_per_queue = 0
+        },
+    % 1000000 channel_created and channel_closed
+        #event_counts{
+            connections = 1, channels_per_connection = 1000000, queues_per_channel = 0,
+            stats_per_connection = 0, stats_per_channel = 0, stats_per_queue = 0
+        },
+    % 1000 connection_created and connection_closed
+    % 1000000 channel_created and channel_closed
+        #event_counts{
+            connections = 1000, channels_per_connection = 1000, queues_per_channel = 0,
+            stats_per_connection = 0, stats_per_channel = 0, stats_per_queue = 0
+        },
+    % 1000 connection_stats
+        #event_counts{
+            connections = 1, channels_per_connection = 1, queues_per_channel = 0,
+            stats_per_connection = 1000, stats_per_channel = 0, stats_per_queue = 0
+        },
+    % 1000000 connection_stats
+        #event_counts{
+            connections = 1, channels_per_connection = 1, queues_per_channel = 0,
+            stats_per_connection = 1000000, stats_per_channel = 0, stats_per_queue = 0
+        },
+    % 1000 connection_created and connection_closed
+    % 1000 channel_created and channel_closed
+    % 1000000 connection_stats
+        #event_counts{
+            connections = 1000, channels_per_connection = 1, queues_per_channel = 0,
+            stats_per_connection = 1000, stats_per_channel = 0, stats_per_queue = 0
+        },
+    % 1000 connection_created and connection_closed
+    % 1000000 channel_created and channel_closed
+    % 1000000 connection_stats
+        #event_counts{
+            connections = 1000, channels_per_connection = 1000, queues_per_channel = 0,
+            stats_per_connection = 1000, stats_per_channel = 0, stats_per_queue = 0
+        }
+    ].
+
+-spec generate_events({global, atom()}, #event_counts{}, string()) -> ok.
+generate_events(Stats_DB, #event_counts{} = Counts, CSV) ->
+    #event_counts{
+        connections = N_Conns,
+        channels_per_connection = N_Chans,
+        stats_per_connection = N_Conn_Stats
+    } = Counts,
     ok = rabbit_mgmt_db_stress_stats:reset(),
     Conns = [ pid_and_name(<<"Conn">>, I) || I <- lists:seq(1, N_Conns) ],
     Chans = [ pid_and_name(Conn, I)  || {_, Conn} <- Conns, I <- lists:seq(1, N_Chans) ],
