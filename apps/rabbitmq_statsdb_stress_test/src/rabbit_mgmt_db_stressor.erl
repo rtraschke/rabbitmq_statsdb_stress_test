@@ -113,66 +113,77 @@ handle_cast_tracer(Msg, State) ->
 
 
 -record(event_counts, {
-    connections :: non_neg_integer(),
-    channels_per_connection :: non_neg_integer(),
-    queues_per_channel :: non_neg_integer(),
-    stats_per_connection :: non_neg_integer(),
-    stats_per_channel :: non_neg_integer(),
-    stats_per_queue :: non_neg_integer()
+    connections = 0 :: non_neg_integer(),
+    channels_per_connection = 0 :: non_neg_integer(),
+    queues_per_channel = 0 :: non_neg_integer(),
+    stats_per_connection = 0 :: non_neg_integer(),
+    stats_per_channel = 0 :: non_neg_integer(),
+    stats_per_queue = 0 :: non_neg_integer(),
+    vhosts = 0 :: non_neg_integer()
 }).
 
 -spec event_counts() -> [#event_counts{}].
 event_counts() ->
     [
+    % 1:
     % 1000 connection_created and connection_closed
         #event_counts{
-            connections = 1000, channels_per_connection = 0, queues_per_channel = 0,
-            stats_per_connection = 0, stats_per_channel = 0, stats_per_queue = 0
+            connections = 1000
         },
+    % 2:
     % 1000000 connection_created and connection_closed
         #event_counts{
-            connections = 1000000, channels_per_connection = 0, queues_per_channel = 0,
-            stats_per_connection = 0, stats_per_channel = 0, stats_per_queue = 0
+            connections = 1000000
         },
+    % 3:
     % 1000 channel_created and channel_closed
         #event_counts{
-            connections = 1, channels_per_connection = 1000, queues_per_channel = 0,
-            stats_per_connection = 0, stats_per_channel = 0, stats_per_queue = 0
+            connections = 1, channels_per_connection = 1000
         },
+    % 4:
     % 1000000 channel_created and channel_closed
         #event_counts{
-            connections = 1, channels_per_connection = 1000000, queues_per_channel = 0,
-            stats_per_connection = 0, stats_per_channel = 0, stats_per_queue = 0
+            connections = 1, channels_per_connection = 1000000
         },
+    % 5:
     % 1000 connection_created and connection_closed
     % 1000000 channel_created and channel_closed
         #event_counts{
-            connections = 1000, channels_per_connection = 1000, queues_per_channel = 0,
-            stats_per_connection = 0, stats_per_channel = 0, stats_per_queue = 0
+            connections = 1000, channels_per_connection = 1000
         },
+    % 6:
     % 1000 connection_stats
         #event_counts{
-            connections = 1, channels_per_connection = 1, queues_per_channel = 0,
-            stats_per_connection = 1000, stats_per_channel = 0, stats_per_queue = 0
+            connections = 1, channels_per_connection = 1, stats_per_connection = 1000
         },
+    % 7:
     % 1000000 connection_stats
         #event_counts{
-            connections = 1, channels_per_connection = 1, queues_per_channel = 0,
-            stats_per_connection = 1000000, stats_per_channel = 0, stats_per_queue = 0
+            connections = 1, channels_per_connection = 1, stats_per_connection = 1000000
         },
+    % 8:
     % 1000 connection_created and connection_closed
     % 1000 channel_created and channel_closed
     % 1000000 connection_stats
         #event_counts{
-            connections = 1000, channels_per_connection = 1, queues_per_channel = 0,
-            stats_per_connection = 1000, stats_per_channel = 0, stats_per_queue = 0
+            connections = 1000, channels_per_connection = 1, stats_per_connection = 1000
         },
+    % 9:
     % 1000 connection_created and connection_closed
     % 1000000 channel_created and channel_closed
     % 1000000 connection_stats
         #event_counts{
-            connections = 1000, channels_per_connection = 1000, queues_per_channel = 0,
-            stats_per_connection = 1000, stats_per_channel = 0, stats_per_queue = 0
+            connections = 1000, channels_per_connection = 1000, stats_per_connection = 1000
+        },
+    % 10:
+    % 1000 vhost_created and vhost_closed
+        #event_counts{
+            vhosts = 1000
+        },
+    % 11:
+    % 1000000 vhost_created and vhost_closed
+        #event_counts{
+            vhosts = 1000000
         }
     ].
 
@@ -181,11 +192,13 @@ generate_events(Stats_DB, CSV, Option) ->
     #event_counts{
         connections = N_Conns,
         channels_per_connection = N_Chans,
-        stats_per_connection = N_Conn_Stats
+        stats_per_connection = N_Conn_Stats,
+        vhosts = N_VHosts
     } = lists:nth(Option, event_counts()),
-    ok = rabbit_mgmt_db_stress_stats:reset(),
     Conns = [ pid_and_name(<<"Conn">>, I) || I <- lists:seq(1, N_Conns) ],
     Chans = [ pid_and_name(Conn, I)  || {_, Conn} <- Conns, I <- lists:seq(1, N_Chans) ],
+    VHosts = [ name(<<"VHost">>, I) || I <- lists:seq(1, N_VHosts) ],
+    ok = rabbit_mgmt_db_stress_stats:reset(),
     io:format("Generating ~p connection_created events.~n", [N_Conns]),
     [ gen_server:cast(Stats_DB, connection_created(Pid, Name))
     || {Pid, Name} <- Conns
@@ -206,7 +219,16 @@ generate_events(Stats_DB, CSV, Option) ->
     [ gen_server:cast(Stats_DB, connection_closed(Pid))
     || {Pid, _} <- Conns
     ],
+    io:format("Generating ~p vhost_created events.~n", [N_VHosts]),
+    [ gen_server:cast(Stats_DB, vhost_created(Name))
+    || Name <- VHosts
+    ],
+    io:format("Generating ~p vhost_deleted events.~n", [N_VHosts]),
+    [ gen_server:cast(Stats_DB, vhost_deleted(Name))
+    || Name <- VHosts
+    ],
     N_Total_Casts =
+        N_VHosts +
         N_Conns +
         N_Conns * N_Chans +
         N_Conns * N_Conn_Stats +
@@ -236,8 +258,12 @@ stats_receiver(N) ->
 
 -spec pid_and_name(binary(), non_neg_integer()) -> {pid(), binary()}.
 pid_and_name(Prefix, I) when is_binary(Prefix), is_integer(I), I >= 0->
+    {spawn(fun () -> ok end), name(Prefix, I)}.
+
+-spec name(binary(), non_neg_integer()) -> binary().
+name(Prefix, I) when is_binary(Prefix), is_integer(I), I >= 0->
     Num = integer_to_binary(I),
-    {spawn(fun () -> ok end), <<Prefix/binary, "_", Num/binary>>}.
+    <<Prefix/binary, "_", Num/binary>>.
 
 % The timestamp is in milli seconds
 -spec timestamp() -> non_neg_integer().
@@ -250,7 +276,13 @@ now_to_micros({Mega, Sec, Micro}) ->
     1000000*1000000*Mega + 1000000*Sec + Micro.
 
 
-% some code adapted from the test suite
+-spec vhost_created(binary()) -> {event, #event{}}.
+vhost_created(Name) when is_binary(Name) ->
+    event(vhost_created, [{name, Name}, {tracing, false}]).
+
+-spec vhost_deleted(binary()) -> {event, #event{}}.
+vhost_deleted(Name) when is_binary(Name) ->
+    event(vhost_deleted, [{name, Name}]).
 
 -spec connection_created(pid(), binary()) -> {event, #event{}}.
 connection_created(Pid, Name) when is_pid(Pid), is_binary(Name) ->
@@ -296,7 +328,6 @@ queue_stats(Name, Msgs) when is_binary(Name), is_integer(Msgs), Msgs >= 0 ->
 queue_deleted(Name) when is_binary(Name) ->
     event(queue_deleted, [{name, queue(Name)}]).
 
-
 -spec event(atom(), list()) -> {event, #event{}}.
 event(Type, Props) ->
     {event, #event{
@@ -313,6 +344,7 @@ queue(Name) when is_binary(Name)->
 -spec exchange(binary()) -> #resource{}.
 exchange(Name) when is_binary(Name)->
     #resource{virtual_host = <<"/">>, kind = exchange, name = Name}.
+
 
 -spec write_to_csv(string(), [{atom(), [{atom(), number()}]}]) -> ok.
 write_to_csv(CSV, Stats) ->
