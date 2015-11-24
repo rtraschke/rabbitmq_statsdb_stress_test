@@ -52,7 +52,6 @@ handle_cast_time(Event, Time_Elapsed) ->
     handle_cast_times = [] :: [{atom(), [non_neg_integer()]}],
     handle_cast_count = 0 :: non_neg_integer()
 }).
--define(CAST_COUNT_FUDGE, 2).
 
 init([]) ->
     {ok, #state{}}.
@@ -60,8 +59,7 @@ init([]) ->
 handle_call(reset, _From, #state{}) ->
     {reply, ok, #state{}};
 handle_call({stats_are_ready, N}, _From, #state{handle_cast_count = Cast_Count} = State) ->
-    Result = Cast_Count > (N + ?CAST_COUNT_FUDGE),
-    {reply, Result, State};
+    {reply, Cast_Count >= N, State};
 handle_call(get, _From,
         #state{msg_counts=Msg_Counts, handle_cast_times = Cast_Times} = State) ->
     Msg_Stats = bear:get_statistics(lists:reverse(Msg_Counts)),
