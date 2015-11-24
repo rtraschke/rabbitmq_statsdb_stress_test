@@ -39,10 +39,11 @@ clear_tracer([Nodename]) when is_list(Nodename) ->
     ok.
 
 -spec run([string()]) -> ok.
-run([Nodename, CSV]) when is_list(Nodename), is_list(CSV) ->
+run([Nodename, CSV, Option]) when is_list(Nodename), is_list(CSV), is_list(Option) ->
     Node = nodename(Nodename),
     case net_adm:ping(Node) of
-        pong -> io:format("Connected to ~p.~n", [Node]), run_on_node(Node, CSV);
+        pong -> io:format("Connected to ~p.~n", [Node]),
+                run_on_node(Node, CSV, list_to_integer(Option));
         pang -> io:format(standard_error, "Could not connect to ~p.~n", [Node]), halt(1)
     end.
 
@@ -56,15 +57,15 @@ nodename(Nodename) ->
             list_to_atom(Nodename ++ "@" ++ Hostname)
     end.
 
--spec run_on_node(atom(), string()) -> ok.
-run_on_node(Node, CSV) ->
+-spec run_on_node(atom(), string(), integer()) -> ok.
+run_on_node(Node, CSV, Option) ->
     Stats_Receiver = stats_receiver(),
     Stats_Pid = global:whereis_name(Stats_Receiver),
     io:format("Stats DB is at ~p (~p).~n", [Stats_Receiver, Stats_Pid]),
     {ok, _} = rabbit_mgmt_db_stress_stats:start_link(),
     {ok, Msg_Q_Len} = timer:apply_interval(100, ?MODULE, message_queue_len, [Node, Stats_Pid]),
     start_handle_cast_tracer(Node, Stats_Receiver, Stats_Pid),
-    generate_events({global, Stats_Receiver}, CSV),
+    generate_events({global, Stats_Receiver}, CSV, Option),
     stop_handle_cast_tracer(),
     {ok, cancel} = timer:cancel(Msg_Q_Len),
     ok = rabbit_mgmt_db_stress_stats:stop().
@@ -119,11 +120,6 @@ handle_cast_tracer(Msg, State) ->
     stats_per_channel :: non_neg_integer(),
     stats_per_queue :: non_neg_integer()
 }).
-
--spec generate_events({global, atom()}, string()) -> ok.
-generate_events(Stats_DB, CSV) ->
-    [ generate_events(Stats_DB, Counts, CSV) || Counts <- event_counts()],
-    ok.
 
 -spec event_counts() -> [#event_counts{}].
 event_counts() ->
@@ -180,13 +176,13 @@ event_counts() ->
         }
     ].
 
--spec generate_events({global, atom()}, #event_counts{}, string()) -> ok.
-generate_events(Stats_DB, #event_counts{} = Counts, CSV) ->
+-spec generate_events({global, atom()}, string(), integer()) -> ok.
+generate_events(Stats_DB, CSV, Option) ->
     #event_counts{
         connections = N_Conns,
         channels_per_connection = N_Chans,
         stats_per_connection = N_Conn_Stats
-    } = Counts,
+    } = lists:nth(Option, event_counts()),
     ok = rabbit_mgmt_db_stress_stats:reset(),
     Conns = [ pid_and_name(<<"Conn">>, I) || I <- lists:seq(1, N_Conns) ],
     Chans = [ pid_and_name(Conn, I)  || {_, Conn} <- Conns, I <- lists:seq(1, N_Chans) ],
