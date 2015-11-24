@@ -229,6 +229,7 @@ generate_events(Stats_DB, CSV, Option) ->
     ],
     N_Total_Casts =
         N_VHosts +
+        N_VHosts +
         N_Conns +
         N_Conns * N_Chans +
         N_Conns * N_Conn_Stats +
