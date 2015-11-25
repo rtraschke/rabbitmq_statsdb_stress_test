@@ -65,7 +65,9 @@ run_on_node(Node, CSV, Option) ->
     {ok, _} = rabbit_mgmt_db_stress_stats:start_link(),
     {ok, Msg_Q_Len} = timer:apply_interval(100, ?MODULE, message_queue_len, [Node, Stats_Pid]),
     start_handle_cast_tracer(Node, Stats_Receiver, Stats_Pid),
-    generate_events({global, Stats_Receiver}, CSV, Option),
+    Mgmt_DB_Caller = spawn_link(fun () -> mgmt_db_call_loop(Node) end),
+    generate_events({global, Stats_Receiver}, Mgmt_DB_Caller, CSV, Option),
+    Mgmt_DB_Caller ! stop,
     stop_handle_cast_tracer(),
     {ok, cancel} = timer:cancel(Msg_Q_Len),
     ok = rabbit_mgmt_db_stress_stats:stop().
@@ -110,6 +112,78 @@ handle_cast_tracer({trace_ts, _Pid, return_from,
 handle_cast_tracer(Msg, State) ->
     io:format(standard_error, "Unexpected handle_call tracer message:~n    ~p~n", [Msg]),
     State.
+
+-spec mgmt_db_call_loop(atom()) -> no_return().
+mgmt_db_call_loop(Node) ->
+    Default_Calls = [{overview, []}, {all_connections, []}, {all_channels, []}, {all_consumers, []}],
+    mgmt_db_call_loop(Node, Default_Calls).
+
+-spec mgmt_db_call_loop(atom(), [{atom(), list()}]) -> no_return().
+mgmt_db_call_loop(Node, Call_Types) ->
+    New_Call_Types = receive
+        stop ->
+            exit(normal);
+        {Type, []} ->
+            lists:keydelete(Type, 1, Call_Types);
+        {Type, Objects} ->
+            lists:keystore(Type, 1, Call_Types, {Type, Objects})
+    after 0 ->
+        Call_Types
+    end,
+    mgmt_db_call(Node, hd(New_Call_Types)),
+    timer:sleep(100),
+    mgmt_db_call_loop(Node, rotate(New_Call_Types)).
+
+-spec rotate(list()) -> list().
+rotate([H | T]) -> T ++ [H].
+
+-spec mgmt_db_call(atom(), {atom(), list()}) -> ok.
+mgmt_db_call(Node, {overview, []}) ->
+    record_call_time(Node, rabbit_mgmt_db, get_overview, [ranges()]);
+mgmt_db_call(Node, {all_connections, []}) ->
+    record_call_time(Node, rabbit_mgmt_db, get_all_connections, [ranges()]);
+mgmt_db_call(Node, {all_channels, []}) ->
+    record_call_time(Node, rabbit_mgmt_db, get_all_channels, [ranges()]);
+mgmt_db_call(Node, {all_consumers, []}) ->
+    record_call_time(Node, rabbit_mgmt_db, get_all_consumers, []);
+mgmt_db_call(Node, {vhosts, VHosts}) ->
+    record_call_time(Node, rabbit_mgmt_db, augment_vhosts, [VHosts, ranges()]);
+mgmt_db_call(_Node, {nodes, _Nodes}) ->
+    ok;
+mgmt_db_call(Node, {connections, Conns}) ->
+    N = length(Conns),
+    [ record_call_time(Node, rabbit_mgmt_db, get_connection, [Name, ranges()])
+    || Name <- Conns, random:uniform(N) < 10
+    ];
+mgmt_db_call(Node, {channels, Chans}) ->
+    N = length(Chans),
+    [ record_call_time(Node, rabbit_mgmt_db, get_channel, [Name, ranges()])
+    || Name <- Chans, random:uniform(N) < 10
+    ];
+mgmt_db_call(_Node, {exchanges, _Exchanges}) ->
+    ok;
+mgmt_db_call(_Node, {queues, _Queues}) ->
+    ok.
+
+-spec record_call_time(atom(), atom(), atom(), list()) -> ok.
+record_call_time(Node, M, F, A) ->
+io:format("~p ~p ~p~n", [M, F, A]),
+    {Time_Elapsed, _Result} = rpc:call(Node, timer, tc, [M, F, A]),
+    rabbit_mgmt_db_stress_stats:handle_call_time(F, Time_Elapsed).
+
+% Mgmt UI default: 60 second ranges in 5 second increments (rounded down)
+% For the stress test, use 5 second ranges in 1 second increments without rounding.
+% Copied from rabbitmq-management/include/rabbit_mgmt.hrl :
+-record(range, {first, last, incr}).
+% Copied mostly from rabbitmq-management/src/rabbit_mgmt_util.erl :
+-spec ranges() -> {#range{}, #range{}, #range{}, #range{}}.
+ranges() ->
+    Age = 5 * 1000, % default: 60 * 1000
+    Incr = 1 * 1000, % default: 5 * 1000
+    Now = timestamp(),
+    Last = Now, % default: (Now div Incr) * Incr
+    R = #range{first = (Last - Age), last  = Last, incr  = Incr},
+    {R, R, R, R}.
 
 
 -record(event_counts, {
@@ -184,45 +258,75 @@ event_counts() ->
     % 1000000 vhost_created and vhost_closed
         #event_counts{
             vhosts = 1000000
+        },
+    % 12:
+    % 1000 queue_created and queue_deleted
+        #event_counts{
+            connections = 1, channels_per_connection = 1, queues_per_channel = 1000
+        },
+    % 13:
+    % 1000000 queue_created and queue_deleted
+        #event_counts{
+            connections = 1, channels_per_connection = 1, queues_per_channel = 1000000
         }
     ].
 
--spec generate_events({global, atom()}, string(), integer()) -> ok.
-generate_events(Stats_DB, CSV, Option) ->
+-spec generate_events({global, atom()}, pid(), string(), integer()) -> ok.
+generate_events(Stats_DB, Mgmt_DB_Caller, CSV, Option) ->
     #event_counts{
         connections = N_Conns,
         channels_per_connection = N_Chans,
+        queues_per_channel = N_Queues,
         stats_per_connection = N_Conn_Stats,
         vhosts = N_VHosts
     } = lists:nth(Option, event_counts()),
     Conns = [ pid_and_name(<<"Conn">>, I) || I <- lists:seq(1, N_Conns) ],
     Chans = [ pid_and_name(Conn, I)  || {_, Conn} <- Conns, I <- lists:seq(1, N_Chans) ],
+    Queues = [ name(Chan, I)  || {_, Chan} <- Chans, I <- lists:seq(1, N_Queues) ],
     VHosts = [ name(<<"VHost">>, I) || I <- lists:seq(1, N_VHosts) ],
     ok = rabbit_mgmt_db_stress_stats:reset(),
     io:format("Generating ~p connection_created events.~n", [N_Conns]),
     [ gen_server:cast(Stats_DB, connection_created(Pid, Name))
     || {Pid, Name} <- Conns
     ],
+    Conns_Sample = [ Name || {_Pid, Name} <- Conns, random:uniform(N_Conns) < 100 ],
+    Mgmt_DB_Caller ! {connections, Conns_Sample},
     io:format("Generating ~p channel_created events.~n", [N_Conns * N_Chans]),
     [ gen_server:cast(Stats_DB, channel_created(Pid, Name))
     || {Pid, Name} <- Chans
     ],
+    Chans_Sample = [ Name || {_Pid, Name} <- Chans, random:uniform(N_Conns * N_Chans) < 100 ],
+    Mgmt_DB_Caller ! {channels, Chans_Sample},
+    io:format("Generating ~p queue_created events.~n", [N_Conns * N_Chans * N_Queues]),
+    [ gen_server:cast(Stats_DB, queue_created(Name))
+    || Name <- Queues
+    ],
     io:format("Generating ~p connection_stats events.~n", [N_Conn_Stats * N_Conns]),
     [ gen_server:cast(Stats_DB, connection_stats(Pid, random:uniform(50)))
-    || _ <- lists:seq(1, N_Conn_Stats), {Pid, _} <- Conns
+    || _ <- lists:seq(1, N_Conn_Stats), {Pid, _Name} <- Conns
+    ],
+    io:format("Generating ~p queue_deleted events.~n", [N_Conns * N_Chans * N_Queues]),
+    [ gen_server:cast(Stats_DB, queue_deleted(Name))
+    || Name <- Queues
     ],
     io:format("Generating ~p channel_closed events.~n", [N_Conns * N_Chans]),
+    Mgmt_DB_Caller ! {channels, []},
     [ gen_server:cast(Stats_DB, channel_closed(Pid))
-    || {Pid, _} <- Chans
+    || {Pid, _Name} <- Chans
     ],
     io:format("Generating ~p connection_closed events.~n", [N_Conns]),
+    Mgmt_DB_Caller ! {connections, []},
     [ gen_server:cast(Stats_DB, connection_closed(Pid))
-    || {Pid, _} <- Conns
+    || {Pid, _Name} <- Conns
     ],
     io:format("Generating ~p vhost_created events.~n", [N_VHosts]),
     [ gen_server:cast(Stats_DB, vhost_created(Name))
     || Name <- VHosts
     ],
+    VHosts_Sample = [ vhost(VHost) || VHost <- VHosts, random:uniform(N_VHosts) < 100 ],
+    Mgmt_DB_Caller ! {vhosts, VHosts_Sample},
+    timer:sleep(1000),
+    Mgmt_DB_Caller ! {vhosts, []},
     io:format("Generating ~p vhost_deleted events.~n", [N_VHosts]),
     [ gen_server:cast(Stats_DB, vhost_deleted(Name))
     || Name <- VHosts
@@ -232,7 +336,9 @@ generate_events(Stats_DB, CSV, Option) ->
         N_VHosts +
         N_Conns +
         N_Conns * N_Chans +
+        N_Conns * N_Chans * N_Queues +
         N_Conns * N_Conn_Stats +
+        N_Conns * N_Chans * N_Queues +
         N_Conns * N_Chans +
         N_Conns,
     io:format("Waiting to receive stats from ~p events.~n", [N_Total_Casts]),
@@ -276,10 +382,14 @@ timestamp() ->
 now_to_micros({Mega, Sec, Micro}) ->
     1000000*1000000*Mega + 1000000*Sec + Micro.
 
+-spec sample_filter(non_neg_integer()) -> boolean().
+sample_filter(N) ->
+    random:uniform(N) < 100.
+
 
 -spec vhost_created(binary()) -> {event, #event{}}.
 vhost_created(Name) when is_binary(Name) ->
-    event(vhost_created, [{name, Name}, {tracing, false}]).
+    event(vhost_created, vhost(Name)).
 
 -spec vhost_deleted(binary()) -> {event, #event{}}.
 vhost_deleted(Name) when is_binary(Name) ->
@@ -319,7 +429,14 @@ channel_closed(Pid) when is_pid(Pid) ->
 
 -spec queue_created(binary()) -> {event, #event{}}.
 queue_created(Name) when is_binary(Name) ->
-    event(queue_created, [{name, queue(Name)}]).
+    event(queue_created, [
+        {name, queue(Name)},
+        {durable, false},
+        {auto_delete, false},
+        {arguments, []},
+        {owner_pid, ''},
+        {exclusive, false}
+    ]).
 
 -spec queue_stats(binary(), non_neg_integer()) -> {event, #event{}}.
 queue_stats(Name, Msgs) when is_binary(Name), is_integer(Msgs), Msgs >= 0 ->
@@ -329,6 +446,27 @@ queue_stats(Name, Msgs) when is_binary(Name), is_integer(Msgs), Msgs >= 0 ->
 queue_deleted(Name) when is_binary(Name) ->
     event(queue_deleted, [{name, queue(Name)}]).
 
+%#event{
+%    type = consumer_created, % deps/rabbit/src/rabbit_amqqueue_process.erl:902
+%    props = [
+%        {consumer_tag, CTag},
+%        {exclusive, Exclusive},
+%        {ack_required, AckRequired},
+%        {channel, ChPid},
+%        {queue, QName},
+%        {prefetch_count, PrefetchCount},
+%        {arguments, Args}
+%    ]
+%}
+%#event{
+%    type = consumer_deleted, % deps/rabbit/src/rabbit_amqqueue_process.erl:913
+%    props = [
+%        {consumer_tag, ConsumerTag},
+%        {channel, ChPid},
+%        {queue, QName}
+%    ]
+%}
+
 -spec event(atom(), list()) -> {event, #event{}}.
 event(Type, Props) ->
     {event, #event{
@@ -337,6 +475,10 @@ event(Type, Props) ->
         reference = none,
         timestamp = timestamp()
     }}.
+
+-spec vhost(binary()) -> [{atom(), term()}].
+vhost(Name) when is_binary(Name)->
+    [{name, Name}, {tracing, false}].
 
 -spec queue(binary()) -> #resource{}.
 queue(Name) when is_binary(Name)->
@@ -404,3 +546,4 @@ filter_percentiles(List) ->
                  ({999, V}) ->
                       {percentile999, V}
               end, List).
+
