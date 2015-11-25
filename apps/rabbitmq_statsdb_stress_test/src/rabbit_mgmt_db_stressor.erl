@@ -115,14 +115,16 @@ handle_cast_tracer(Msg, State) ->
 
 -spec mgmt_db_call_loop(atom()) -> no_return().
 mgmt_db_call_loop(Node) ->
-    Default_Calls = [{overview, []}, {all_connections, []}, {all_channels, []}, {all_consumers, []}],
+    Default_Calls = [{overview, true}, {all_connections, true}, {all_channels, true}, {all_consumers, true}],
     mgmt_db_call_loop(Node, Default_Calls).
 
--spec mgmt_db_call_loop(atom(), [{atom(), list()}]) -> no_return().
+-spec mgmt_db_call_loop(atom(), [{atom(), boolean() | list()}]) -> no_return().
 mgmt_db_call_loop(Node, Call_Types) ->
     New_Call_Types = receive
         stop ->
             exit(normal);
+        {Type, On_Off} when is_boolean(On_Off) ->
+            lists:keystore(Type, 1, Call_Types, {Type, On_Off});
         {Type, []} ->
             lists:keydelete(Type, 1, Call_Types);
         {Type, Objects} ->
@@ -138,14 +140,28 @@ mgmt_db_call_loop(Node, Call_Types) ->
 rotate([H | T]) -> T ++ [H].
 
 -spec mgmt_db_call(atom(), {atom(), list()}) -> ok.
-mgmt_db_call(Node, {overview, []}) ->
+mgmt_db_call(Node, {overview, true}) ->
     record_call_time(Node, rabbit_mgmt_db, get_overview, [ranges()]);
-mgmt_db_call(Node, {all_connections, []}) ->
-    record_call_time(Node, rabbit_mgmt_db, get_all_connections, [ranges()]);
-mgmt_db_call(Node, {all_channels, []}) ->
-    record_call_time(Node, rabbit_mgmt_db, get_all_channels, [ranges()]);
-mgmt_db_call(Node, {all_consumers, []}) ->
+mgmt_db_call(_Node, {overview, false}) ->
+    ok;
+mgmt_db_call(Node, {all_connections, true}) ->
+    case random:uniform(4) of
+        1 -> record_call_time(Node, rabbit_mgmt_db, get_all_connections, [ranges()]);
+        _ -> ok
+    end;
+mgmt_db_call(_Node, {all_connections, false}) ->
+    ok;
+mgmt_db_call(Node, {all_channels, true}) ->
+    case random:uniform(4) of
+        1 -> record_call_time(Node, rabbit_mgmt_db, get_all_channels, [ranges()]);
+        _ -> ok
+    end;
+mgmt_db_call(_Node, {all_channels, false}) ->
+    ok;
+mgmt_db_call(Node, {all_consumers, true}) ->
     record_call_time(Node, rabbit_mgmt_db, get_all_consumers, []);
+mgmt_db_call(_Node, {all_consumers, false}) ->
+    ok;
 mgmt_db_call(Node, {vhosts, VHosts}) ->
     record_call_time(Node, rabbit_mgmt_db, augment_vhosts, [VHosts, ranges()]);
 mgmt_db_call(_Node, {nodes, _Nodes}) ->
@@ -167,7 +183,6 @@ mgmt_db_call(_Node, {queues, _Queues}) ->
 
 -spec record_call_time(atom(), atom(), atom(), list()) -> ok.
 record_call_time(Node, M, F, A) ->
-io:format("~p ~p ~p~n", [M, F, A]),
     {Time_Elapsed, _Result} = rpc:call(Node, timer, tc, [M, F, A]),
     rabbit_mgmt_db_stress_stats:handle_call_time(F, Time_Elapsed).
 
@@ -286,12 +301,14 @@ generate_events(Stats_DB, Mgmt_DB_Caller, CSV, Option) ->
     VHosts = [ name(<<"VHost">>, I) || I <- lists:seq(1, N_VHosts) ],
     ok = rabbit_mgmt_db_stress_stats:reset(),
     io:format("Generating ~p connection_created events.~n", [N_Conns]),
+    Mgmt_DB_Caller ! {all_connections, N_Conns =< 1000},
     [ gen_server:cast(Stats_DB, connection_created(Pid, Name))
     || {Pid, Name} <- Conns
     ],
     Conns_Sample = [ Name || {_Pid, Name} <- Conns, random:uniform(N_Conns) < 100 ],
     Mgmt_DB_Caller ! {connections, Conns_Sample},
     io:format("Generating ~p channel_created events.~n", [N_Conns * N_Chans]),
+    Mgmt_DB_Caller ! {all_channels, (N_Conns * N_Chans) =< 1000},
     [ gen_server:cast(Stats_DB, channel_created(Pid, Name))
     || {Pid, Name} <- Chans
     ],
@@ -314,11 +331,13 @@ generate_events(Stats_DB, Mgmt_DB_Caller, CSV, Option) ->
     [ gen_server:cast(Stats_DB, channel_closed(Pid))
     || {Pid, _Name} <- Chans
     ],
+    Mgmt_DB_Caller ! {all_channels, true},
     io:format("Generating ~p connection_closed events.~n", [N_Conns]),
     Mgmt_DB_Caller ! {connections, []},
     [ gen_server:cast(Stats_DB, connection_closed(Pid))
     || {Pid, _Name} <- Conns
     ],
+    Mgmt_DB_Caller ! {all_connections, true},
     io:format("Generating ~p vhost_created events.~n", [N_VHosts]),
     [ gen_server:cast(Stats_DB, vhost_created(Name))
     || Name <- VHosts

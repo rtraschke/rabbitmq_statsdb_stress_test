@@ -44,7 +44,7 @@ handle_cast_time(Event, Time_Elapsed) ->
 
 -spec handle_call_time(atom(), non_neg_integer()) -> ok.
 handle_call_time(Fun, Time_Elapsed) ->
-    gen_server:cast(?MODULE, {handle_call_time, Fun, Time_Elapsed}).
+    gen_server:call(?MODULE, {handle_call_time, Fun, Time_Elapsed}).
 
 
 % We know that we are ready to give stats results when the expected
@@ -71,14 +71,16 @@ handle_call(get, _From,
             handle_call_times = Call_Times} = State) ->
     Msg_Stats = bear:get_statistics(lists:reverse(Msg_Counts)),
     Cast_Stats = [
-        {Event, bear:get_statistics(lists:reverse(Event_Times))}
-        || {Event, Event_Times} <- Cast_Times
+        {Event, bear:get_statistics(lists:reverse(Event_Cast_Times))}
+        || {Event, Event_Cast_Times} <- Cast_Times
     ],
     Call_Stats = [
-        {Fun, bear:get_statistics(lists:reverse(Event_Times))}
-        || {Fun, Event_Times} <- Call_Times
+        {Fun, bear:get_statistics(lists:reverse(Fun_Call_Times))}
+        || {Fun, Fun_Call_Times} <- Call_Times
     ],
     {reply, [{msg_counts, Msg_Stats} | Cast_Stats++Call_Stats], State};
+handle_call({handle_call_time, Fun, Micros}, _From, #state{handle_call_times=Call_Times} = State) ->
+    {reply, ok, State#state{handle_call_times = add_time(Fun, Micros, Call_Times)}};
 handle_call(_Request, _From, State) ->
     {reply, bad_request, State}.
 
@@ -92,8 +94,6 @@ handle_cast({handle_cast_time, Event, Micros},
         handle_cast_times = add_time(Event, Micros, Cast_Times),
         handle_cast_count = Cast_Count + 1
     }};
-handle_cast({handle_call_time, Fun, Micros}, #state{handle_call_times=Call_Times} = State) ->
-    {noreply, State#state{handle_call_times = add_time(Fun, Micros, Call_Times)}};
 handle_cast(_Request, State) ->
     {noreply, State}.
 
@@ -108,10 +108,10 @@ code_change(_Old, State, _Extra) ->
 
 -spec add_time(atom(), non_neg_integer(), [{atom(), [non_neg_integer()]}])
         -> [{atom(), [non_neg_integer()]}].
-add_time(Event, Micros, Cast_Times) ->
-    case lists:keyfind(Event, 1, Cast_Times) of
+add_time(Key, Micros, Times) ->
+    case lists:keyfind(Key, 1, Times) of
         false ->
-            lists:keystore(Event, 1, Cast_Times, {Event, [Micros]});
-        {Event, Event_Times} ->
-            lists:keyreplace(Event, 1, Cast_Times, {Event, [Micros | Event_Times]})
+            lists:keystore(Key, 1, Times, {Key, [Micros]});
+        {Key, Key_Times} ->
+            lists:keyreplace(Key, 1, Times, {Key, [Micros | Key_Times]})
     end.
