@@ -2,7 +2,8 @@
 
 -behaviour(gen_server).
 
--export([start_link/0, stop/0, reset/0, get/1, message_queue_len/1, handle_cast_time/2]).
+-export([start_link/0, stop/0, reset/0, get/1, message_queue_len/1,
+    handle_cast_time/2, handle_call_time/2]).
 
 % Export the gen_server callback functions.
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -41,6 +42,10 @@ message_queue_len(Len) ->
 handle_cast_time(Event, Time_Elapsed) ->
     gen_server:cast(?MODULE, {handle_cast_time, Event, Time_Elapsed}).
 
+-spec handle_call_time(atom(), non_neg_integer()) -> ok.
+handle_call_time(Fun, Time_Elapsed) ->
+    gen_server:call(?MODULE, {handle_call_time, Fun, Time_Elapsed}).
+
 
 % We know that we are ready to give stats results when the expected
 % number of handle_cast calls has been recorded. Because the monitored
@@ -50,7 +55,8 @@ handle_cast_time(Event, Time_Elapsed) ->
 -record(state, {
     msg_counts = [] :: [non_neg_integer()],
     handle_cast_times = [] :: [{atom(), [non_neg_integer()]}],
-    handle_cast_count = 0 :: non_neg_integer()
+    handle_cast_count = 0 :: non_neg_integer(),
+    handle_call_times = [] :: [{atom(), [non_neg_integer()]}]
 }).
 
 init([]) ->
@@ -61,13 +67,20 @@ handle_call(reset, _From, #state{}) ->
 handle_call({stats_are_ready, N}, _From, #state{handle_cast_count = Cast_Count} = State) ->
     {reply, Cast_Count >= N, State};
 handle_call(get, _From,
-        #state{msg_counts=Msg_Counts, handle_cast_times = Cast_Times} = State) ->
+        #state{msg_counts=Msg_Counts, handle_cast_times = Cast_Times,
+            handle_call_times = Call_Times} = State) ->
     Msg_Stats = bear:get_statistics(lists:reverse(Msg_Counts)),
     Cast_Stats = [
-        {Event, bear:get_statistics(lists:reverse(Event_Times))}
-        || {Event, Event_Times} <- Cast_Times
+        {Event, bear:get_statistics(lists:reverse(Event_Cast_Times))}
+        || {Event, Event_Cast_Times} <- Cast_Times
     ],
-    {reply, [{msg_counts, Msg_Stats} | Cast_Stats], State};
+    Call_Stats = [
+        {Fun, bear:get_statistics(lists:reverse(Fun_Call_Times))}
+        || {Fun, Fun_Call_Times} <- Call_Times
+    ],
+    {reply, [{msg_counts, Msg_Stats} | Cast_Stats++Call_Stats], State};
+handle_call({handle_call_time, Fun, Micros}, _From, #state{handle_call_times=Call_Times} = State) ->
+    {reply, ok, State#state{handle_call_times = add_time(Fun, Micros, Call_Times)}};
 handle_call(_Request, _From, State) ->
     {reply, bad_request, State}.
 
@@ -78,7 +91,7 @@ handle_cast({message_queue_len, Len}, #state{msg_counts=Msg_Counts} = State) ->
 handle_cast({handle_cast_time, Event, Micros},
         #state{handle_cast_times = Cast_Times, handle_cast_count = Cast_Count} = State) ->
     {noreply, State#state{
-        handle_cast_times = add_event_cast_time(Event, Micros, Cast_Times),
+        handle_cast_times = add_time(Event, Micros, Cast_Times),
         handle_cast_count = Cast_Count + 1
     }};
 handle_cast(_Request, State) ->
@@ -93,12 +106,12 @@ terminate(_Reason, _State) ->
 code_change(_Old, State, _Extra) ->
     {ok, State}.
 
--spec add_event_cast_time(atom(), non_neg_integer(), [{atom(), [non_neg_integer()]}])
+-spec add_time(atom(), non_neg_integer(), [{atom(), [non_neg_integer()]}])
         -> [{atom(), [non_neg_integer()]}].
-add_event_cast_time(Event, Micros, Cast_Times) ->
-    case lists:keyfind(Event, 1, Cast_Times) of
+add_time(Key, Micros, Times) ->
+    case lists:keyfind(Key, 1, Times) of
         false ->
-            lists:keystore(Event, 1, Cast_Times, {Event, [Micros]});
-        {Event, Event_Times} ->
-            lists:keyreplace(Event, 1, Cast_Times, {Event, [Micros | Event_Times]})
+            lists:keystore(Key, 1, Times, {Key, [Micros]});
+        {Key, Key_Times} ->
+            lists:keyreplace(Key, 1, Times, {Key, [Micros | Key_Times]})
     end.
