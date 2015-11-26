@@ -338,13 +338,11 @@ generate_events(Stats_DB, Mgmt_DB_Caller, CSV, Option) ->
     [ gen_server:cast(Stats_DB, channel_closed(Pid))
     || {Pid, _Name} <- Chans
     ],
-    Mgmt_DB_Caller ! {all_channels, true},
     io:format("Generating ~p connection_closed events.~n", [N_Conns]),
     Mgmt_DB_Caller ! {connections, []},
     [ gen_server:cast(Stats_DB, connection_closed(Pid))
     || {Pid, _Name} <- Conns
     ],
-    Mgmt_DB_Caller ! {all_connections, true},
     io:format("Generating ~p vhost_created events.~n", [N_VHosts]),
     [ gen_server:cast(Stats_DB, vhost_created(Name))
     || Name <- VHosts
