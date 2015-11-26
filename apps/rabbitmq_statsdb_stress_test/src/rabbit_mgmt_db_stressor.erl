@@ -413,10 +413,6 @@ timestamp() ->
 now_to_micros({Mega, Sec, Micro}) ->
     1000000*1000000*Mega + 1000000*Sec + Micro.
 
--spec sample_filter(non_neg_integer()) -> boolean().
-sample_filter(N) ->
-    random:uniform(N) < 100.
-
 
 -spec vhost_created(binary()) -> {event, #event{}}.
 vhost_created(Name) when is_binary(Name) ->
