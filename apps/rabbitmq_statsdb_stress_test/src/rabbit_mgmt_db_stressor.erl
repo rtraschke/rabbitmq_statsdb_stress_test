@@ -208,7 +208,8 @@ ranges() ->
     stats_per_connection = 0 :: non_neg_integer(),
     stats_per_channel = 0 :: non_neg_integer(),
     stats_per_queue = 0 :: non_neg_integer(),
-    vhosts = 0 :: non_neg_integer()
+    vhosts = 0 :: non_neg_integer(),
+    node_stats = 0 :: non_neg_integer()
 }).
 
 -spec event_counts() -> [#event_counts{}].
@@ -275,11 +276,16 @@ event_counts() ->
             vhosts = 1000000
         },
     % 12:
+    % 100000 node_stats
+        #event_counts{
+            node_stats = 100000
+        },
+    % 13:
     % 1000 queue_created and queue_deleted
         #event_counts{
             connections = 1, channels_per_connection = 1, queues_per_channel = 1000
         },
-    % 13:
+    % 14:
     % 1000000 queue_created and queue_deleted
         #event_counts{
             connections = 1, channels_per_connection = 1, queues_per_channel = 1000000
@@ -293,7 +299,8 @@ generate_events(Stats_DB, Mgmt_DB_Caller, CSV, Option) ->
         channels_per_connection = N_Chans,
         queues_per_channel = N_Queues,
         stats_per_connection = N_Conn_Stats,
-        vhosts = N_VHosts
+        vhosts = N_VHosts,
+        node_stats = N_Nodes
     } = lists:nth(Option, event_counts()),
     Conns = [ pid_and_name(<<"Conn">>, I) || I <- lists:seq(1, N_Conns) ],
     Chans = [ pid_and_name(Conn, I)  || {_, Conn} <- Conns, I <- lists:seq(1, N_Chans) ],
@@ -350,6 +357,10 @@ generate_events(Stats_DB, Mgmt_DB_Caller, CSV, Option) ->
     [ gen_server:cast(Stats_DB, vhost_deleted(Name))
     || Name <- VHosts
     ],
+    io:format("Generating ~p node_stats events.~n", [N_Nodes]),
+    [ gen_server:cast(Stats_DB, node_stats())
+    || _ <- lists:seq(1, N_Nodes)
+    ],
     N_Total_Casts =
         N_VHosts +
         N_VHosts +
@@ -359,7 +370,8 @@ generate_events(Stats_DB, Mgmt_DB_Caller, CSV, Option) ->
         N_Conns * N_Conn_Stats +
         N_Conns * N_Chans * N_Queues +
         N_Conns * N_Chans +
-        N_Conns,
+        N_Conns +
+        N_Nodes,
     io:format("Waiting to receive stats from ~p events.~n", [N_Total_Casts]),
     Stats = rabbit_mgmt_db_stress_stats:get(N_Total_Casts),
     write_to_csv(CSV, Stats),
@@ -464,6 +476,137 @@ queue_stats(Name, Msgs) when is_binary(Name), is_integer(Msgs), Msgs >= 0 ->
 -spec queue_deleted(binary()) -> {event, #event{}}.
 queue_deleted(Name) when is_binary(Name) ->
     event(queue_deleted, [{name, queue(Name)}]).
+
+-spec node_stats() -> {event, #event{}}.
+node_stats() ->
+    event(node_stats, [{name,rabbit@isis},
+                       {partitions,[]},
+                       {os_pid,<<"72705">>},
+                       {fd_used,33},
+                       {fd_total,16384},
+                       {sockets_used,1},
+                       {sockets_total,14653},
+                       {mem_used,54491616},
+                       {mem_limit,6393013862},
+                       {mem_alarm,false},
+                       {disk_free_limit,50000000},
+                       {disk_free,145587232768},
+                       {disk_free_alarm,false},
+                       {proc_used,198},
+                       {proc_total,1048576},
+                       {rates_mode,basic},
+                       {uptime,217354},
+                       {run_queue,0},
+                       {processors,4},
+                       {exchange_types,[[{name,<<"topic">>},
+                                         {description,<<"AMQP topic exchange, as per the AMQP specification">>},
+                                         {enabled,true}],
+                                        [{name,<<"fanout">>},
+                                         {description,<<"AMQP fanout exchange, as per the AMQP specification">>},
+                                         {enabled,true}],
+                                        [{name,<<"direct">>},
+                                         {description,<<"AMQP direct exchange, as per the AMQP specification">>},
+                                         {enabled,true}],
+                                        [{name,<<"headers">>},
+                                         {description,<<"AMQP headers exchange, as per the AMQP specification">>},
+                                         {enabled,true}]]},
+                       {auth_mechanisms,[[{name,<<"AMQPLAIN">>},
+                                          {description,<<"QPid AMQPLAIN mechanism">>},
+                                          {enabled,true}],
+                                         [{name,<<"PLAIN">>},
+                                          {description,<<"SASL PLAIN authentication mechanism">>},
+                                          {enabled,true}],
+                                         [{name,<<"RABBIT-CR-DEMO">>},
+                                          {description,<<"RabbitMQ Demo challenge-response authentication mechanism">>},
+                                          {enabled,false}]]},
+                       {applications,[[{name,amqp_client},
+                                       {description,<<"RabbitMQ AMQP Client">>},
+                                       {version,<<>>}],
+                                      [{name,asn1},
+                                       {description,<<"The Erlang ASN1 compiler version 3.0.3">>},
+                                       {version,<<"3.0.3">>}],
+                                      [{name,compiler},
+                                       {description,<<"ERTS  CXC 138 10">>},
+                                       {version,<<"5.0.3">>}],
+                                      [{name,crypto},
+                                       {description,<<"CRYPTO">>},
+                                       {version,<<"3.4.2">>}],
+                                      [{name,inets},
+                                       {description,<<"INETS  CXC 138 49">>},
+                                       {version,<<"5.10.4">>}],
+                                      [{name,kernel},
+                                       {description,<<"ERTS  CXC 138 10">>},
+                                       {version,<<"3.1">>}],
+                                      [{name,mnesia},
+                                       {description,<<"MNESIA  CXC 138 12">>},
+                                       {version,<<"4.12.4">>}],
+                                      [{name,mochiweb},
+                                       {description,<<"MochiMedia Web Server">>},
+                                       {version,<<"2.13.0">>}],
+                                      [{name,os_mon},
+                                       {description,<<"CPO  CXC 138 46">>},
+                                       {version,<<"2.3">>}],
+                                      [{name,public_key},
+                                       {description,<<"Public key infrastructure">>},
+                                       {version,<<"0.22.1">>}],
+                                      [{name,rabbit},
+                                       {description,<<"RabbitMQ">>},
+                                       {version,<<"0.0.0">>}],
+                                      [{name,rabbit_common},{description,<<>>},{version,<<>>}],
+                                      [{name,rabbitmq_management},
+                                       {description,<<"RabbitMQ Management Console">>},
+                                       {version,<<>>}],
+                                      [{name,rabbitmq_management_agent},
+                                       {description,<<"RabbitMQ Management Agent">>},
+                                       {version,<<>>}],
+                                      [{name,rabbitmq_web_dispatch},
+                                       {description,<<"RabbitMQ Web Dispatcher">>},
+                                       {version,<<>>}],
+                                      [{name,sasl},
+                                       {description,<<"SASL  CXC 138 11">>},
+                                       {version,<<"2.4.1">>}],
+                                      [{name,ssl},
+                                       {description,<<"Erlang/OTP SSL application">>},
+                                       {version,<<"5.3.8">>}],
+                                      [{name,stdlib},
+                                       {description,<<"ERTS  CXC 138 10">>},
+                                       {version,<<"2.3">>}],
+                                      [{name,syntax_tools},
+                                       {description,<<"Syntax tools">>},
+                                       {version,<<"1.6.17">>}],                [{name,webmachine},                 {description,<<"webmachine">>},
+                                                                                {version,<<"git">>}],
+                                      [{name,xmerl},
+                                       {description,<<"XML parser">>},
+                                       {version,<<"1.3.7">>}]]},
+                       {contexts,[[{description,<<"RabbitMQ Management">>},
+                                   {path,<<"/">>},
+                                   {port,<<"15672">>}]]},
+                       {log_file,<<"/var/folders/5q/vkjhc27d4w9_hc69p7q3vd1w0000gp/T/rabbitmq-test-instances/rabbit/log/rabbit.log">>},
+                       {sasl_log_file,<<"/var/folders/5q/vkjhc27d4w9_hc69p7q3vd1w0000gp/T/rabbitmq-test-instances/rabbit/log/rabbit-sasl.log">>},
+                       {db_dir,<<"/var/folders/5q/vkjhc27d4w9_hc69p7q3vd1w0000gp/T/rabbitmq-test-instances/rabbit/mnesia/rabbit">>},
+                       {config_files,[<<"/etc/rabbitmq/rabbitmq.config (not found)">>]},
+                       {net_ticktime,60},
+                       {enabled_plugins,[amqp_client,mochiweb,rabbitmq_management,
+                                         rabbitmq_management_agent,rabbitmq_web_dispatch,
+                                         webmachine]},
+                       {persister_stats, [{io_read_bytes,1},
+                                          {io_read_count,1},
+                                          {io_reopen_count,0},
+                                          {io_seek_count,0},
+                                          {io_sync_count,0},
+                                          {io_write_bytes,0},
+                                          {io_write_count,0},
+                                          {mnesia_disk_tx_count,15},
+                                          {mnesia_ram_tx_count,6},
+                                          {msg_store_read_count,0},
+                                          {msg_store_write_count,0},
+                                          {queue_index_journal_write_count,0},
+                                          {queue_index_read_count,0},
+                                          {queue_index_write_count,0},
+                                          {io_read_avg_time,0},
+                                          {io_seek_avg_time,0},
+                                          {io_sync_avg_time,0},
+                                          {io_write_avg_time,0}]}]).
 
 %#event{
 %    type = consumer_created, % deps/rabbit/src/rabbit_amqqueue_process.erl:902
