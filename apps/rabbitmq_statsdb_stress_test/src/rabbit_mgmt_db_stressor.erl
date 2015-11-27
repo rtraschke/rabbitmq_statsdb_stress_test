@@ -289,6 +289,41 @@ event_counts() ->
     % 1000000 queue_created and queue_deleted
         #event_counts{
             connections = 1, channels_per_connection = 1, queues_per_channel = 1000000
+        },
+    % 15:
+    % 1000 queue_created, queue_deleted
+    % 1000 channel_stats
+    % 100000 queue_stats
+        #event_counts{
+            connections = 1, channels_per_connection = 1, stats_per_channel = 1000,
+            queues_per_channel = 1000, stats_per_queue = 100
+        },
+
+    % 16:
+    % 1000 queue_created, queue_deleted
+    % 1000 channel_stats
+    % 10000000 queue_stats
+        #event_counts{
+            connections = 1, channels_per_connection = 1, stats_per_channel = 1000,
+            queues_per_channel = 1000, stats_per_queue = 1000
+        },
+
+    % 17:
+    % 1000 queue_created, queue_deleted
+    % 100000 channel_stats
+    % 100000 queue_stats
+        #event_counts{
+            connections = 1, channels_per_connection = 100, stats_per_channel = 1000,
+            queues_per_channel = 10, stats_per_queue = 100
+        },
+
+    % 18:
+    % 1000 queue_created, queue_deleted
+    % 1000000 channel_stats
+    % 100000000 queue_stats
+        #event_counts{
+            connections = 1, channels_per_connection = 100, stats_per_channel = 1000,
+            queues_per_channel = 1000, stats_per_queue = 1000
         }
     ].
 
@@ -298,52 +333,89 @@ generate_events(Stats_DB, Mgmt_DB_Caller, CSV, Option) ->
         connections = N_Conns,
         channels_per_connection = N_Chans,
         queues_per_channel = N_Queues,
+        stats_per_channel = N_Ch_Stats,
         stats_per_connection = N_Conn_Stats,
+        stats_per_queue = N_Queue_Stats,
         vhosts = N_VHosts,
         node_stats = N_Nodes
     } = lists:nth(Option, event_counts()),
     Conns = [ pid_and_name(<<"Conn">>, I) || I <- lists:seq(1, N_Conns) ],
     Chans = [ pid_and_name(Conn, I)  || {_, Conn} <- Conns, I <- lists:seq(1, N_Chans) ],
-    Queues = [ name(Chan, I)  || {_, Chan} <- Chans, I <- lists:seq(1, N_Queues) ],
     VHosts = [ name(<<"VHost">>, I) || I <- lists:seq(1, N_VHosts) ],
+    Queues = [ name(<<"Queue">>, I) || I <- lists:seq(1, (N_Queues*length(Chans))) ],
+    Exchanges = [ name(<<"Ex">>, I) || I <- lists:seq(1, (N_Queues*length(Chans))) ],
+    QXs = [ queue_and_exchange(Q, X) || {Q, X} <- lists:zip(Queues, Exchanges) ],
+
+    QProps = [ queue_props(Name) || Name <- Queues],
+    XProps = [ exchange_props(Name) || Name <- Exchanges],
+    QXProps= [ queue_exchange_props(QRes, XRes, random:uniform(50)) || {QRes, XRes} <- QXs],
+
+    QStatProps = [ Props || _I <- lists:seq(1, N_Queue_Stats), Props <- QProps],
+    QXStatProps = [ Props || _I <- lists:seq(1, N_Queue_Stats), Props <- QXProps],
+    XStatProps = [ Props || _I <- lists:seq(1, N_Queue_Stats), Props <- XProps],
+
     ok = rabbit_mgmt_db_stress_stats:reset(),
-    io:format("Generating ~p connection_created events.~n", [N_Conns]),
+    io:format("Generating ~p connection_created events.~n", [C1 = N_Conns]),
     Mgmt_DB_Caller ! {all_connections, N_Conns =< 1000},
     [ gen_server:cast(Stats_DB, connection_created(Pid, Name))
     || {Pid, Name} <- Conns
     ],
     Conns_Sample = [ Name || {_Pid, Name} <- Conns, random:uniform(N_Conns) < 100 ],
     Mgmt_DB_Caller ! {connections, Conns_Sample},
-    io:format("Generating ~p channel_created events.~n", [N_Conns * N_Chans]),
+    io:format("Generating ~p channel_created events.~n", [C2 = N_Conns * N_Chans]),
     Mgmt_DB_Caller ! {all_channels, (N_Conns * N_Chans) =< 1000},
     [ gen_server:cast(Stats_DB, channel_created(Pid, Name))
     || {Pid, Name} <- Chans
     ],
     Chans_Sample = [ Name || {_Pid, Name} <- Chans, random:uniform(N_Conns * N_Chans) < 100 ],
     Mgmt_DB_Caller ! {channels, Chans_Sample},
-    io:format("Generating ~p queue_created events.~n", [N_Conns * N_Chans * N_Queues]),
-    [ gen_server:cast(Stats_DB, queue_created(Name))
-    || Name <- Queues
+    io:format("Generating ~p queue_created events.~n", [C3 = N_Conns * N_Chans * N_Queues]),
+    [ gen_server:cast(Stats_DB, queue_created(Props))
+    || Props <- QProps
     ],
-    io:format("Generating ~p connection_stats events.~n", [N_Conn_Stats * N_Conns]),
+    io:format("Generating ~p queue_stats events.~n", [C4 = N_Conns * N_Chans * N_Queues * N_Queue_Stats]),
+    [ gen_server:cast(Stats_DB, queue_stats(Props))
+    || Props <- QStatProps
+    ],
+    io:format("Generating ~p exchange_created events.~n", [C5 = N_Conns * N_Chans * N_Queues]),
+    [ gen_server:cast(Stats_DB, exchange_created(Props))
+    || Props <- XProps
+    ],
+    io:format("Generating ~p exchange_stats events.~n", [C6 = N_Conns * N_Chans * N_Queues * N_Queue_Stats]),
+    [ gen_server:cast(Stats_DB, exchange_stats(Props))
+    || Props <- XStatProps
+    ],
+    io:format("Generating ~p queue_exchange_stats events.~n", [C7 = N_Conns * N_Chans * N_Queues * N_Queue_Stats]),
+    [ gen_server:cast(Stats_DB, queue_exchange_stats(Props))
+    || Props <- QXStatProps
+    ],
+    io:format("Generating ~p channel_stats events.~n", [C8 = N_Conns * N_Chans * N_Ch_Stats]),
+    [ gen_server:cast(Stats_DB, channel_stats(Pid, XStatProps, QXStatProps, QStatProps))
+    || _I <- lists:seq(1, N_Ch_Stats), {Pid, _Name} <- Chans
+    ],
+    io:format("Generating ~p connection_stats events.~n", [C9 = N_Conn_Stats * N_Conns]),
     [ gen_server:cast(Stats_DB, connection_stats(Pid, random:uniform(50)))
     || _ <- lists:seq(1, N_Conn_Stats), {Pid, _Name} <- Conns
     ],
-    io:format("Generating ~p queue_deleted events.~n", [N_Conns * N_Chans * N_Queues]),
-    [ gen_server:cast(Stats_DB, queue_deleted(Name))
-    || Name <- Queues
+    io:format("Generating ~p queue_deleted events.~n", [C10 = N_Conns * N_Chans * N_Queues]),
+    [ gen_server:cast(Stats_DB, queue_deleted(Props))
+    || Props <- QProps
     ],
-    io:format("Generating ~p channel_closed events.~n", [N_Conns * N_Chans]),
+    io:format("Generating ~p exchange_deleted events.~n", [C10 = N_Conns * N_Chans * N_Queues]),
+    [ gen_server:cast(Stats_DB, exchange_deleted(Props))
+    || Props <- XProps
+    ],
+    io:format("Generating ~p channel_closed events.~n", [C11 = N_Conns * N_Chans]),
     Mgmt_DB_Caller ! {channels, []},
     [ gen_server:cast(Stats_DB, channel_closed(Pid))
     || {Pid, _Name} <- Chans
     ],
-    io:format("Generating ~p connection_closed events.~n", [N_Conns]),
+    io:format("Generating ~p connection_closed events.~n", [C12 = N_Conns]),
     Mgmt_DB_Caller ! {connections, []},
     [ gen_server:cast(Stats_DB, connection_closed(Pid))
     || {Pid, _Name} <- Conns
     ],
-    io:format("Generating ~p vhost_created events.~n", [N_VHosts]),
+    io:format("Generating ~p vhost_created events.~n", [C13 = N_VHosts]),
     [ gen_server:cast(Stats_DB, vhost_created(Name))
     || Name <- VHosts
     ],
@@ -351,25 +423,16 @@ generate_events(Stats_DB, Mgmt_DB_Caller, CSV, Option) ->
     Mgmt_DB_Caller ! {vhosts, VHosts_Sample},
     timer:sleep(1000),
     Mgmt_DB_Caller ! {vhosts, []},
-    io:format("Generating ~p vhost_deleted events.~n", [N_VHosts]),
+    io:format("Generating ~p vhost_deleted events.~n", [C14 = N_VHosts]),
     [ gen_server:cast(Stats_DB, vhost_deleted(Name))
     || Name <- VHosts
     ],
-    io:format("Generating ~p node_stats events.~n", [N_Nodes]),
+    io:format("Generating ~p node_stats events.~n", [C15 = N_Nodes]),
     [ gen_server:cast(Stats_DB, node_stats())
     || _ <- lists:seq(1, N_Nodes)
     ],
-    N_Total_Casts =
-        N_VHosts +
-        N_VHosts +
-        N_Conns +
-        N_Conns * N_Chans +
-        N_Conns * N_Chans * N_Queues +
-        N_Conns * N_Conn_Stats +
-        N_Conns * N_Chans * N_Queues +
-        N_Conns * N_Chans +
-        N_Conns +
-        N_Nodes,
+    N_Total_Casts = C1 + C2 + C3 + C4 + C5 + C6 + C7 + C8 +
+                    C9 + C10 + C11 + C12 + C13 + C14 + C15,
     io:format("Waiting to receive stats from ~p events.~n", [N_Total_Casts]),
     Stats = rabbit_mgmt_db_stress_stats:get(N_Total_Casts),
     write_to_csv(CSV, Stats),
@@ -400,6 +463,16 @@ pid_and_name(Prefix, I) when is_binary(Prefix), is_integer(I), I >= 0->
 name(Prefix, I) when is_binary(Prefix), is_integer(I), I >= 0->
     Num = integer_to_binary(I),
     <<Prefix/binary, "_", Num/binary>>.
+
+fine_stats_format(Props) ->
+    Name = get_name_prop(Props),
+    {Name, Props--[Name]}.
+
+get_name_prop(Props) ->
+    case proplists:lookup(name, Props) of
+        {name, N} -> N;
+        _         -> throw({"'name' undefined", Props})
+    end.
 
 % The timestamp is in milli seconds
 -spec timestamp() -> non_neg_integer().
@@ -432,15 +505,19 @@ connection_stats(Pid, Oct)  when is_pid(Pid), is_integer(Oct), Oct >= 0->
 connection_closed(Pid) when is_pid(Pid) ->
     event(connection_closed, [{pid, Pid}]).
 
+%% ----------------------
+%% Channel props & events
+%% ----------------------
 -spec channel_created(pid(), binary()) -> {event, #event{}}.
 channel_created(Pid, Name) when is_pid(Pid), is_binary(Name) ->
     event(channel_created, [{pid, Pid}, {name, Name}]).
 
 -spec channel_stats(pid(), list(), list(), list()) -> {event, #event{}}.
-channel_stats(Pid, XStats, QXStats, QStats) ->
-    XStats1 = [ {exchange(XName), [{publish, N}]} || {XName, N} <- XStats ],
-    QXStats1 = [ {{queue(QName), exchange(XName)}, [{publish, N}]} || {QName, XName, N} <- QXStats ],
-    QStats1 = [ {queue(QName), [{deliver_no_ack, N}]} || {QName, N} <- QStats ],
+channel_stats(Pid, XStatsProps, QXStatsProps, QStatsProps) ->
+    XStats1 = [ fine_stats_format(Props) || Props <- XStatsProps ],
+    QXStats1 = [ fine_stats_format(Props) || Props <- QXStatsProps ],
+    QStats1 = [ fine_stats_format(Props) || Props <- QStatsProps ],
+
     event(channel_stats, [
         {pid, Pid},
         {channel_exchange_stats, XStats1},
@@ -452,25 +529,65 @@ channel_stats(Pid, XStats, QXStats, QStats) ->
 channel_closed(Pid) when is_pid(Pid) ->
     event(channel_closed, [{pid, Pid}]).
 
--spec queue_created(binary()) -> {event, #event{}}.
-queue_created(Name) when is_binary(Name) ->
-    event(queue_created, [
-        {name, queue(Name)},
-        {durable, false},
-        {auto_delete, false},
-        {arguments, []},
-        {owner_pid, ''},
-        {exclusive, false}
-    ]).
+%% --------------------
+%% Queue props & events
+%% --------------------
+-spec queue_props(binary()) -> list().
+queue_props(Name) when is_binary(Name) ->
+    [{name, queue(Name)},
+     {messages, random:uniform(50)},
+     {durable, false},
+     {auto_delete, false},
+     {arguments, []},
+     {owner_pid, ''},
+     {exclusive, false},
+     {deliver_no_ack, random:uniform(50)}].
 
--spec queue_stats(binary(), non_neg_integer()) -> {event, #event{}}.
-queue_stats(Name, Msgs) when is_binary(Name), is_integer(Msgs), Msgs >= 0 ->
-    event(queue_stats, [{name, queue(Name)}, {messages, Msgs}]).
+-spec queue_created(list()) -> {event, #event{}}.
+queue_created(QProps) when is_list(QProps) ->
+    event(queue_created, [get_name_prop(QProps)]).
 
--spec queue_deleted(binary()) -> {event, #event{}}.
-queue_deleted(Name) when is_binary(Name) ->
-    event(queue_deleted, [{name, queue(Name)}]).
+-spec queue_stats(list()) -> {event, #event{}}.
+queue_stats(QProps) when is_list(QProps) ->
+    event(queue_stats, QProps).
 
+-spec queue_deleted(list()) -> {event, #event{}}.
+queue_deleted(QStats) when is_list(QStats) ->
+    event(queue_deleted, [get_name_prop(QStats)]).
+
+%% -----------------------
+%% Exchange props & events
+%% -----------------------
+-spec exchange_props(binary()) -> list().
+exchange_props(Name) when is_binary(Name)  ->
+    [{name, exchange(Name)}, {publish, random:uniform(50)}].
+
+-spec exchange_created(binary()) -> {event, #event{}}.
+exchange_created(XProps) when is_list(XProps) ->
+    event(exchange_created, [get_name_prop(XProps)]).
+
+-spec exchange_stats(list()) -> {event, #event{}}.
+exchange_stats(XProps) when is_list(XProps) ->
+    event(exchange_stats, XProps).
+
+-spec exchange_deleted(list()) -> {event, #event{}}.
+exchange_deleted(XProps) when is_list(XProps) ->
+    event(exchange_deleted, [get_name_prop(XProps)]).
+
+%% -----------------------------
+%% Queue exchange props & events
+%% -----------------------------
+-spec queue_exchange_props(#resource{}, #resource{}, non_neg_integer()) -> list().
+queue_exchange_props(QRes=#resource{}, XRes=#resource{}, Publishes) when is_integer(Publishes) ->
+    [{name, {QRes, XRes}}, {publish, Publishes}].
+
+-spec queue_exchange_stats(list()) -> {event, #event{}}.
+queue_exchange_stats(QXStats) ->
+    event(queue_exchange_stats, QXStats).
+
+%% -----------
+%% Node events
+%% -----------
 -spec node_stats() -> {event, #event{}}.
 node_stats() ->
     event(node_stats, [{name,rabbit@isis},
@@ -644,6 +761,9 @@ queue(Name) when is_binary(Name)->
 exchange(Name) when is_binary(Name)->
     #resource{virtual_host = <<"/">>, kind = exchange, name = Name}.
 
+-spec queue_and_exchange(binary(), binary()) -> {#resource{}, #resource{}}.
+queue_and_exchange(QName, XName) ->
+    {queue(QName), exchange(XName)}.
 
 -spec write_to_csv(string(), [{atom(), [{atom(), number()}]}]) -> ok.
 write_to_csv(CSV, Stats) ->
