@@ -588,7 +588,7 @@ queue_deleted(QStats) when is_list(QStats) ->
 exchange_props(Name) when is_binary(Name)  ->
     [{name, exchange(Name)}, {publish, random:uniform(50)}].
 
--spec exchange_created(binary()) -> {event, #event{}}.
+-spec exchange_created(list()) -> {event, #event{}}.
 exchange_created(XProps) when is_list(XProps) ->
     event(exchange_created, [get_name_prop(XProps)]).
 
