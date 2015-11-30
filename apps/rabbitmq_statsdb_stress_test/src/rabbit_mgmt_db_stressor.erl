@@ -536,6 +536,8 @@ channel_closed(Pid) when is_pid(Pid) ->
 queue_props(Name) when is_binary(Name) ->
     [{name, queue(Name)},
      {messages, random:uniform(50)},
+     {messages_ready, random:uniform(50)},
+     {messages_unacknowledged, random:uniform(50)},
      {durable, false},
      {auto_delete, false},
      {arguments, []},
