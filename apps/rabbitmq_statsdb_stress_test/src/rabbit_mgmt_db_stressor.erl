@@ -289,8 +289,32 @@ event_counts() ->
     % 1000000 queue_created and queue_deleted
         #event_counts{
             connections = 1, channels_per_connection = 1, queues_per_channel = 1000000
-        },
+          }, 
     % 15:
+    % 1000 channel_stats
+        #event_counts{
+            connections = 1, channels_per_connection = 1, stats_per_channel = 1000,
+            queues_per_channel = 1, stats_per_queue = 1
+          },
+    % 16:
+    % 1000000 channel_stats
+        #event_counts{
+            connections = 1, channels_per_connection = 1, stats_per_channel = 1000000,
+            queues_per_channel = 1, stats_per_queue = 1
+          },
+    % 17:
+    % 1000 queue_stats
+        #event_counts{
+            connections = 1, channels_per_connection = 1, stats_per_channel = 1,
+            queues_per_channel = 1, stats_per_queue = 1000
+          },
+    % 18:
+    % 1000000 queue_stats
+        #event_counts{
+            connections = 1, channels_per_connection = 1, stats_per_channel = 1,
+            queues_per_channel = 1, stats_per_queue = 1000000
+          },
+    % 19:
     % 1000 queue_created, queue_deleted
     % 1000 channel_stats
     % 100000 queue_stats
@@ -299,7 +323,7 @@ event_counts() ->
             queues_per_channel = 1000, stats_per_queue = 100
         },
 
-    % 16:
+    % 20:
     % 1000 queue_created, queue_deleted
     % 1000 channel_stats
     % 10000000 queue_stats
@@ -308,7 +332,7 @@ event_counts() ->
             queues_per_channel = 1000, stats_per_queue = 1000
         },
 
-    % 17:
+    % 21:
     % 1000 queue_created, queue_deleted
     % 100000 channel_stats
     % 100000 queue_stats
@@ -317,7 +341,7 @@ event_counts() ->
             queues_per_channel = 10, stats_per_queue = 100
         },
 
-    % 18:
+    % 22:
     % 1000 queue_created, queue_deleted
     % 1000000 channel_stats
     % 100000000 queue_stats
