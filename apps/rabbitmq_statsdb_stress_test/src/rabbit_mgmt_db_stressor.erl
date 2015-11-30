@@ -571,7 +571,7 @@ queue_props(Name) when is_binary(Name) ->
 
 -spec queue_created(list()) -> {event, #event{}}.
 queue_created(QProps) when is_list(QProps) ->
-    event(queue_created, [get_name_prop(QProps)]).
+    event(queue_created, QProps).
 
 -spec queue_stats(list()) -> {event, #event{}}.
 queue_stats(QProps) when is_list(QProps) ->
