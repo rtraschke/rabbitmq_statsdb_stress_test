@@ -63,6 +63,10 @@ run_on_node(Node, CSV, Option) ->
     Stats_Pid = global:whereis_name(Stats_Receiver),
     io:format("Stats DB is at ~p (~p).~n", [Stats_Receiver, Stats_Pid]),
     {ok, _} = rabbit_mgmt_db_stress_stats:start_link(),
+%    {ok, Tokens, _} = erl_scan:string("fun(_) -> {ok, ignore_this} end."),
+%    {ok, Ast} = erl_parse:parse_exprs(Tokens),
+%    {value, Fun, _} = rpc:call(Node, erl_eval, exprs, [Ast, []]),
+%    ok = rpc:call(Node, Stats_Receiver, override_lookups, [[{exchange, Fun}, {queue, Fun}]]),
     {ok, Msg_Q_Len} = timer:apply_interval(100, ?MODULE, message_queue_len, [Node, Stats_Pid]),
     start_handle_cast_tracer(Node, Stats_Receiver, Stats_Pid),
     Mgmt_DB_Caller = spawn_link(fun () -> mgmt_db_call_loop(Node) end),
@@ -70,6 +74,7 @@ run_on_node(Node, CSV, Option) ->
     Mgmt_DB_Caller ! stop,
     stop_handle_cast_tracer(),
     {ok, cancel} = timer:cancel(Msg_Q_Len),
+%    ok = rpc:call(Node, Stats_Receiver, reset_lookups, []),
     ok = rabbit_mgmt_db_stress_stats:stop().
 
 
