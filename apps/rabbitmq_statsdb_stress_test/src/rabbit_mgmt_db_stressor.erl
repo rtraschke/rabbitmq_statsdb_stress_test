@@ -366,8 +366,8 @@ generate_events(Stats_DB, Mgmt_DB_Caller, CSV, Option) ->
     Conns = [ pid_and_name(<<"Conn">>, I) || I <- lists:seq(1, N_Conns) ],
     Chans = [ pid_and_name(Conn, I)  || {_, Conn} <- Conns, I <- lists:seq(1, N_Chans) ],
     VHosts = [ name(<<"VHost">>, I) || I <- lists:seq(1, N_VHosts) ],
-    Queues = [ name(<<"Queue">>, I) || I <- lists:seq(1, (N_Queues*length(Chans))) ],
-    Exchanges = [ name(<<"Ex">>, I) || I <- lists:seq(1, (N_Queues*length(Chans))) ],
+    Queues = [ name(<<"Queue">>, I) || I <- lists:seq(1, (N_Queues*N_Chans*N_Conns)) ],
+    Exchanges = [ name(<<"Ex">>, I) || I <- lists:seq(1, (N_Queues*N_Chans*N_Conns)) ],
     QXs = [ queue_and_exchange(Q, X) || {Q, X} <- lists:zip(Queues, Exchanges) ],
 
     QProps = [ queue_props(Name) || Name <- Queues],
